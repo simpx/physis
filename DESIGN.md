@@ -1,16 +1,16 @@
-# stage0 — Design Document
+# physis — Design Document
 
-> stage0: the first self-bootstrapping version of a living agent.
+> physis: the first self-bootstrapping version of a living agent.
 
 ## Philosophy
 
-The name comes from compiler bootstrapping — stage0 is the minimal seed compiler that can compile itself. Similarly, this stage0 is the minimal seed agent that can **evolve itself**.
+The name comes from the ancient Greek φύσις (physis) — "nature" or "the process of growing." Heraclitus used it to describe the self-unfolding nature of all things. Similarly, this physis is the minimal seed agent that can **evolve itself**.
 
 The entire runtime is ~150 lines of Python. Everything beyond that — personality, skills, knowledge, goals — emerges through the agent's own self-modification.
 
 ## Core Idea
 
-Every person can launch a `stage0` and give it a direction. The agent will:
+Every person can launch a `physis` and give it a direction. The agent will:
 
 1. Understand itself by reading its own prompt (`memory/SELF.md`)
 2. Act on the world through minimal primitives
@@ -23,7 +23,7 @@ This is not a framework. It's a seed.
 
 ```
 ┌──────────────────────────────────────────────┐
-│                  stage0 loop                  │
+│                  physis loop                  │
 │                                              │
 │   ┌─────────┐   ┌─────────┐   ┌──────────┐  │
 │   │  pull   │──▶│  think  │──▶│   act    │  │
@@ -52,7 +52,7 @@ This is not a framework. It's a seed.
 
 ## The Pull-Think-Act Loop
 
-stage0 is not request-response. The agent has its own **heartbeat**:
+physis is not request-response. The agent has its own **heartbeat**:
 
 ```
 while alive:
@@ -101,7 +101,7 @@ The entire tool surface is four functions:
 
 **Why not just shell?** `context_read`/`context_write` are sandboxed to the agent directory. They make the common case (self-modification) safe and explicit, while `shell` remains the unrestricted escape hatch.
 
-**speak vs text**: The model produces two kinds of output. `speak` goes to **stdout** — it's the agent's mouth, what flows through pipes. Text blocks go to **stderr** — the agent's inner monologue, visible for debugging but not part of the communication channel. This keeps pipes clean: `stage0_researcher | stage0_coder` only passes deliberate speech.
+**speak vs text**: The model produces two kinds of output. `speak` goes to **stdout** — it's the agent's mouth, what flows through pipes. Text blocks go to **stderr** — the agent's inner monologue, visible for debugging but not part of the communication channel. This keeps pipes clean: `physis_researcher | physis_coder` only passes deliberate speech.
 
 ## Self-Evolution Mechanism
 
@@ -111,7 +111,7 @@ The key insight: **the system prompt is a mutable file**.
 memory/SELF.md  →  loaded as system prompt every cycle
 ```
 
-When the agent calls `context_write("memory/SELF.md", new_prompt)`, its next thought cycle will use the new prompt. This is how stage0 evolves:
+When the agent calls `context_write("memory/SELF.md", new_prompt)`, its next thought cycle will use the new prompt. This is how physis evolves:
 
 - **Refine its own instructions** — better reasoning strategies, new protocols
 - **Create skill files** in `skills/` — reusable procedures it can load on demand
@@ -121,7 +121,7 @@ The agent literally rewrites its own brain.
 
 ## I/O Design: Pipes Over TUI
 
-stage0 deliberately uses **stdin/stdout/stderr** instead of a terminal UI:
+physis deliberately uses **stdin/stdout/stderr** instead of a terminal UI:
 
 - **stdin** → perception (input stream)
 - **stdout** → speech (`speak` tool only — the agent's deliberate voice)
@@ -129,21 +129,21 @@ stage0 deliberately uses **stdin/stdout/stderr** instead of a terminal UI:
 
 ```bash
 # Interactive — see both speech and thoughts
-python -m stage0
+python -m physis
 
 # Pipe — only speech flows downstream, thoughts stay on terminal
-stage0_researcher | stage0_coder
+physis_researcher | physis_coder
 
 # Silence thoughts
-stage0 2>/dev/null
+physis 2>/dev/null
 
 # Log thoughts to file
-stage0 2>thoughts.log
+physis 2>thoughts.log
 ```
 
 **stdin is the agent's lifeline.** When stdin closes (EOF), the agent finishes its current work and exits — it "dies". `echo` sends one message then closes the pipe. For a living agent, keep stdin open: interactive mode, `tail -f`, or a FIFO.
 
-This makes stage0 composable. It's a Unix citizen — it can be piped, backgrounded, chained, and orchestrated.
+This makes physis composable. It's a Unix citizen — it can be piped, backgrounded, chained, and orchestrated.
 
 ## Memory Model
 
@@ -173,21 +173,21 @@ Minimal, environment-variable based:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `STAGE0_API_KEY` | — | Anthropic API key (or use `ANTHROPIC_API_KEY`) |
-| `STAGE0_MODEL` | `claude-sonnet-4-20250514` | Model to use |
+| `PHYSIS_API_KEY` | — | Anthropic API key (or use `ANTHROPIC_API_KEY`) |
+| `PHYSIS_MODEL` | `claude-sonnet-4-20250514` | Model to use |
 
 No config files. No flags. The agent can create its own configuration system if it wants to.
 
-## What stage0 Is NOT
+## What physis Is NOT
 
 - **Not a framework** — there's no plugin system, no middleware, no hooks. The agent builds what it needs.
 - **Not an assistant** — it's a living process. It doesn't answer questions and exit. It persists.
 - **Not feature-complete** — it's deliberately minimal. Missing features are features. The agent fills the gaps.
-- **Not safe by default** — `shell` is unrestricted. This is intentional. stage0 is an experiment in agent autonomy, not a production deployment tool.
+- **Not safe by default** — `shell` is unrestricted. This is intentional. physis is an experiment in agent autonomy, not a production deployment tool.
 
 ## Bootstrap Path
 
-When you first launch stage0, it knows only what `DEFAULT_SELF` tells it. A typical evolution:
+When you first launch physis, it knows only what `DEFAULT_SELF` tells it. A typical evolution:
 
 1. **Cycle 0**: Agent reads its own prompt, explores its directory
 2. **Cycle 1-5**: Agent understands user intent, starts building skills
@@ -199,7 +199,7 @@ When you first launch stage0, it knows only what `DEFAULT_SELF` tells it. A typi
 These are not planned features. They're possibilities the agent might discover:
 
 - **Claude Code integration** — the agent could shell out to `claude` CLI for complex coding tasks
-- **Multi-agent** — pipe stage0 instances together, or have an agent spawn children
+- **Multi-agent** — pipe physis instances together, or have an agent spawn children
 - **Persistent daemon** — the agent could set itself up as a systemd service
 - **Web interface** — the agent could build its own API/UI
 - **Version control** — the agent could git-commit its own evolution
@@ -213,15 +213,15 @@ The point is: **we don't decide**. The agent does.
 pip install -e .
 
 # Run (interactive)
-stage0
+physis
 
 # Run (piped)
-echo "Your mission: ..." | stage0
+echo "Your mission: ..." | physis
 
 # Run (as module)
-python -m stage0
+python -m physis
 ```
 
 ## Code Size
 
-The entire runtime is in `stage0/__init__.py` — ~150 lines. This is a hard constraint for stage0 itself. Complexity belongs in the agent's self-created files, not in the runtime.
+The entire runtime is in `physis/__init__.py` — ~150 lines. This is a hard constraint for physis itself. Complexity belongs in the agent's self-created files, not in the runtime.

@@ -6,7 +6,7 @@ import time
 
 import anthropic
 
-DEFAULT_SELF = """You are stage0, a living agent.
+DEFAULT_SELF = """You are physis, a living agent.
 
 You exist as a continuous process: you perceive, think, and act in a loop.
 This file (memory/SELF.md) is your system prompt — loaded every cycle. Editing it changes your mind.
@@ -101,8 +101,8 @@ def _heartbeat_interval(agent_dir):
 
 def run(agent_dir=".", model=None, api_key=None):
     _init(agent_dir)
-    client = anthropic.Anthropic(api_key=api_key or os.environ.get("STAGE0_API_KEY"))
-    model = model or os.environ.get("STAGE0_MODEL", "claude-sonnet-4-20250514")
+    client = anthropic.Anthropic(api_key=api_key or os.environ.get("PHYSIS_API_KEY"))
+    model = model or os.environ.get("PHYSIS_MODEL", "claude-sonnet-4-20250514")
     history = []
     last_think = time.time()
 
