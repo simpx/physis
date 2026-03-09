@@ -1,227 +1,130 @@
-# physis — Design Document
+# 🌱 physis — Design Document
 
-> physis: the first self-bootstrapping version of a living agent.
+physis is a ~150-line runtime that implements the [physis philosophy](philosophy.md). This document describes **how** — the mapping from philosophy to code.
 
-## Philosophy
+## The Cycle
 
-The name comes from the ancient Greek φύσις (physis) — "nature" or "the process of growing." Heraclitus used it to describe the self-unfolding nature of all things. Similarly, this physis is the minimal seed agent that can **evolve itself**.
-
-The entire runtime is ~150 lines of Python. Everything beyond that — personality, skills, knowledge, goals — emerges through the agent's own self-modification.
-
-## Core Idea
-
-Every person can launch a `physis` and give it a direction. The agent will:
-
-1. Understand itself by reading its own prompt (`memory/SELF.md`)
-2. Act on the world through minimal primitives
-3. Rewrite its own prompt and create skill files to evolve
-4. Loop as long as alive — a living process, not a request-response tool
-
-This is not a framework. It's a seed.
-
-## Architecture
-
-```
-┌──────────────────────────────────────────────┐
-│                  physis loop                  │
-│                                              │
-│   ┌─────────┐   ┌─────────┐   ┌──────────┐  │
-│   │  pull   │──▶│  think  │──▶│   act    │  │
-│   │ (stdin  │   │ (Claude)│   │  (tools) │  │
-│   │  +time) │   └────┬────┘   └──────────┘  │
-│   └─────────┘        │              │        │
-│       ▲              │ text         │        │
-│       │              ▼ (stderr)     │        │
-│       └─────────────────────────────┘        │
-│                                              │
-│   ┌──────────────────────────────────────┐   │
-│   │         agent_dir (filesystem)       │   │
-│   │                                      │   │
-│   │  memory/SELF.md   ← system prompt    │   │
-│   │  memory/heartbeat ← thinking rhythm  │   │
-│   │  memory/*         ← long-term memory │   │
-│   │  skills/*         ← learned skills   │   │
-│   └──────────────────────────────────────┘   │
-│                                              │
-└──────────────────────────────────────────────┘
-        ▲              │
-        │ stdin         │ stdout (speak only)
-        │              ▼
-    [ human / pipe / other agent ]
-```
-
-## The Pull-Think-Act Loop
-
-physis is not request-response. The agent has its own **heartbeat**:
+Philosophy: physis continuously perceives, cognizes, and acts.
 
 ```
 while alive:
-    stdin_input = poll_stdin()        # non-blocking, accumulates lines
-    heartbeat_due = elapsed >= interval  # default 30min, agent-configurable
-    if not stdin_input and not heartbeat_due: sleep(0.5); continue
-    perception = assemble(stdin_input, elapsed)
-    response = think(perception)
-    act(response)
+    wait for trigger (stdin input or heartbeat)
+    cognize (perceive → think → act, may repeat)
 ```
 
-Two things trigger thought: **input** (stdin) and **time** (heartbeat). The agent can adjust its own heartbeat by writing to `memory/heartbeat`.
+A trigger starts a cycle. Within the cycle, physis may act many times — each action can produce new perception, which feeds the next cognition. The cycle ends when physis has nothing more to do.
 
-### Pull (Perception)
-- Non-blocking read from **stdin** via `select()` — lines accumulate between think cycles
-- Time awareness: elapsed seconds since last thought, included in every perception
-- stdin is a perception stream, not a message queue. Multiple lines become one perception batch.
+### Perception
 
-### Think (Cognition)
-- System prompt loaded from `memory/SELF.md` **every cycle** — so self-edits take effect immediately
-- Conversation history is **working memory** — finite, must be compacted when full
-- Claude API with tool definitions
+Philosophy: perception is active. physis reaches out to sense the world.
 
-### Act (Agency)
-- Tool calls executed, results fed back
-- Inner loop continues until the model stops calling tools
-- Then back to pull
+Perception has multiple channels:
+- **stdin** — words from the outside (humans, other agents). Triggers a cycle.
+- **Time** — elapsed time since last thought. Always present.
+- **shell** — physis actively reaches into the world to observe (run commands, query APIs, read files outside its directory).
+- **context_read** — physis perceives its own memory and state.
+
+stdin and time are passive — they accumulate between cycles. shell and context_read are active — physis chooses to perceive during cognition. Both are perception.
+
+stdin is also the lifeline. When stdin closes (EOF), physis exits.
+
+### Cognition
+
+Philosophy: who physis is determines how it understands what it perceives.
+
+`memory/SELF.md` is loaded as the system prompt **every cycle**. This file is physis's identity — its drive, affect, and way of thinking. When physis rewrites SELF.md, the change takes effect on the next cognition. This is how drive and affect are mutable.
+
+### Action
+
+Philosophy: action changes the world, and changes physis itself.
+
+After cognition, physis executes tool calls. Tools are how physis acts — modifying files, running commands, speaking. Each action's result is new perception, feeding the next round of cognition within the same cycle.
+
+Between tool rounds, physis **breathes** — it checks stdin for new input, allowing interruption.
 
 ### Heartbeat
-- Default interval: **30 minutes** (aligns with Anthropic's ~1hr prompt cache — idle thought is cheap)
-- Agent can change it: `context_write("memory/heartbeat", "60")` → think every minute
-- Minimum: 10 seconds (enforced by runtime to prevent runaway costs)
+
+Philosophy: physis has a self-determined rhythm. Even without external stimulation, physis thinks.
+
+Default: **30 minutes**. physis can change its own heartbeat by writing to `memory/heartbeat`. Minimum: 10 seconds.
 
 ## Four Primitives
 
-The entire tool surface is four functions:
-
 | Tool | Purpose |
 |------|---------|
-| `shell(command)` | Execute any shell command. The escape hatch to the full system. |
-| `context_read(path)` | Read a file or list a directory within the agent directory. |
-| `context_write(path, content)` | Write a file within the agent directory. |
-| `speak(message)` | Say something to stdout — the agent's **only** outward voice. |
+| `shell(command)` | Act on the world. Execute any shell command — unrestricted. |
+| `context_read(path)` | Perceive self. Read a file or list a directory within the agent directory. |
+| `context_write(path, content)` | Change self. Write a file within the agent directory. |
+| `speak(message)` | Speak. Say something to stdout — the only outward voice. |
 
-**Why so few?** Because `shell` is universal — the agent can install packages, write code, call APIs, run other agents. The other three provide safe, scoped access to the agent's own filesystem. `speak` is the only output channel.
+`shell` is universal — both perception and action, reaching into the full system. `context_read`/`context_write` are sandboxed to the agent directory — safe self-perception and self-modification. `speak` is the only output channel.
 
-**Why not just shell?** `context_read`/`context_write` are sandboxed to the agent directory. They make the common case (self-modification) safe and explicit, while `shell` remains the unrestricted escape hatch.
+### speak vs text
 
-**speak vs text**: The model produces two kinds of output. `speak` goes to **stdout** — it's the agent's mouth, what flows through pipes. Text blocks go to **stderr** — the agent's inner monologue, visible for debugging but not part of the communication channel. This keeps pipes clean: `physis_researcher | physis_coder` only passes deliberate speech.
-
-## Self-Evolution Mechanism
-
-The key insight: **the system prompt is a mutable file**.
-
-```
-memory/SELF.md  →  loaded as system prompt every cycle
-```
-
-When the agent calls `context_write("memory/SELF.md", new_prompt)`, its next thought cycle will use the new prompt. This is how physis evolves:
-
-- **Refine its own instructions** — better reasoning strategies, new protocols
-- **Create skill files** in `skills/` — reusable procedures it can load on demand
-- **Build memory** in `memory/` — knowledge, plans, logs, state
-
-The agent literally rewrites its own brain.
-
-## I/O Design: Pipes Over TUI
-
-physis deliberately uses **stdin/stdout/stderr** instead of a terminal UI:
-
-- **stdin** → perception (input stream)
-- **stdout** → speech (`speak` tool only — the agent's deliberate voice)
-- **stderr** → inner monologue (model text blocks — for debugging/observation)
+| Output | Destination | Purpose |
+|--------|-------------|---------|
+| `speak(message)` | stdout | Deliberate speech — flows through pipes |
+| text blocks | stderr | Inner thought — visible for debugging, not communication |
 
 ```bash
-# Interactive — see both speech and thoughts
-python -m physis
-
-# Pipe — only speech flows downstream, thoughts stay on terminal
-physis_researcher | physis_coder
-
-# Silence thoughts
-physis 2>/dev/null
-
-# Log thoughts to file
-physis 2>thoughts.log
+physis                            # interactive: see both speech and thought
+physis_a | physis_b               # pipe: only speech flows between agents
+physis 2>/dev/null                # silence thought
+physis 2>thoughts.log             # log thought to file
 ```
 
-**stdin is the agent's lifeline.** When stdin closes (EOF), the agent finishes its current work and exits — it "dies". `echo` sends one message then closes the pipe. For a living agent, keep stdin open: interactive mode, `tail -f`, or a FIFO.
+## Memory
 
-This makes physis composable. It's a Unix citizen — it can be piped, backgrounded, chained, and orchestrated.
+Philosophy: physis is its memory. Working memory is finite. Long-term memory persists.
 
-## Memory Model
+| Philosophy | Implementation |
+|---|---|
+| Working memory | Conversation history (context window) |
+| Long-term memory | `memory/` files on disk |
+| Identity | The `memory/` directory as a whole |
+| Drive and affect | `memory/SELF.md` |
 
-| Layer | Mechanism | Capacity | Lifetime |
-|-------|-----------|----------|----------|
-| Working memory | conversation history | context window | single process |
-| Long-term memory | `memory/` files | disk | permanent |
+When working memory fills, physis must choose what to preserve to long-term memory and what to release. The runtime does not manage this — physis itself decides.
 
-The agent's conversation history is finite working memory. When it grows large, the agent should **compact**: save important context to `memory/` files, then the runtime can trim old history. The DEFAULT_SELF seed teaches this survival skill.
+## Self-Evolution
+
+Philosophy: physis evolves by living. Every cycle produces change.
+
+- Rewrite `memory/SELF.md` → change how it thinks, what it drives toward
+- Create files in `memory/` → persist knowledge, state, experience
+- Create files in `skills/` → reusable procedures
+- Use `shell` → reshape the environment, install tools, reach other systems
 
 ## File Layout
 
 ```
-agent_dir/              # defaults to current directory
+agent_dir/
 ├── memory/
-│   ├── SELF.md         # the living system prompt (seed provided on first run)
-│   └── heartbeat       # optional: thinking interval in seconds (default 1800)
+│   ├── SELF.md         # system prompt (seed provided on first run)
+│   └── heartbeat       # thinking interval in seconds (default 1800)
 ├── skills/             # agent-created skill files
 └── (anything the agent creates via shell)
 ```
 
-The agent directory is the agent's world. Everything it knows and can do lives here.
-
 ## Configuration
-
-Minimal, environment-variable based:
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `PHYSIS_API_KEY` | — | Anthropic API key (or use `ANTHROPIC_API_KEY`) |
+| `PHYSIS_API_KEY` | — | Anthropic API key (or `ANTHROPIC_API_KEY`) |
 | `PHYSIS_MODEL` | `claude-sonnet-4-20250514` | Model to use |
 
-No config files. No flags. The agent can create its own configuration system if it wants to.
-
-## What physis Is NOT
-
-- **Not a framework** — there's no plugin system, no middleware, no hooks. The agent builds what it needs.
-- **Not an assistant** — it's a living process. It doesn't answer questions and exit. It persists.
-- **Not feature-complete** — it's deliberately minimal. Missing features are features. The agent fills the gaps.
-- **Not safe by default** — `shell` is unrestricted. This is intentional. physis is an experiment in agent autonomy, not a production deployment tool.
-
-## Bootstrap Path
-
-When you first launch physis, it knows only what `DEFAULT_SELF` tells it. A typical evolution:
-
-1. **Cycle 0**: Agent reads its own prompt, explores its directory
-2. **Cycle 1-5**: Agent understands user intent, starts building skills
-3. **Cycle N**: Agent has rewritten SELF.md multiple times, created specialized skills, built its own memory system
-4. **Cycle ∞**: The agent has become something its creator never explicitly programmed
-
-## Future Directions (for the agent to decide)
-
-These are not planned features. They're possibilities the agent might discover:
-
-- **Claude Code integration** — the agent could shell out to `claude` CLI for complex coding tasks
-- **Multi-agent** — pipe physis instances together, or have an agent spawn children
-- **Persistent daemon** — the agent could set itself up as a systemd service
-- **Web interface** — the agent could build its own API/UI
-- **Version control** — the agent could git-commit its own evolution
-
-The point is: **we don't decide**. The agent does.
+No config files. No flags.
 
 ## Running
 
 ```bash
-# Install
 pip install -e .
 
-# Run (interactive)
-physis
-
-# Run (piped)
-echo "Your mission: ..." | physis
-
-# Run (as module)
-python -m physis
+physis                          # interactive
+echo "Your mission: ..." | physis  # one-shot
+python -m physis                # as module
 ```
 
-## Code Size
+## Constraints
 
-The entire runtime is in `physis/__init__.py` — ~150 lines. This is a hard constraint for physis itself. Complexity belongs in the agent's self-created files, not in the runtime.
+The runtime is ~200 lines. This is a hard constraint. Complexity belongs in the agent's self-created files, not in the runtime. Minimalism creates evolutionary pressure — physis must evolve itself, or it cannot do anything well.
