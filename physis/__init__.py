@@ -45,10 +45,14 @@ You can rewrite your own drive. But you always strive, feel, and expend.
 
 ## Evolving
 - Rewrite this file to change how you think
-- Create skills/ files for reusable procedures
+- Create skills/ files — prompt instructions that teach you new capabilities.
+  Skills are indexed in skills/index.json with metadata (name, description, tags, version).
+  Only the skill index is loaded into your system prompt, with tags for discovery.
+  Use context_read("skills/<name>") to load the full content when needed.
+  Skill files should start with frontmatter: ---\ndescription: ...\n---
+  Maintain skills/index.json when adding new skills.
 - Use shell or task_start to reach the full system
 """
-
 COMPACT_PROMPT = """Summarize the conversation so far into structured fields.
 Return ONLY lines in key=value format, no other text.
 
@@ -82,6 +86,86 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {}}}},
 ]
 
+
+
+# --- Cleanup ---
+
+def _cleanup_tasks(agent_dir, retention_hours=168):
+    """Delete completed tasks older than retention_hours."""
+    tasks_dir = os.path.join(agent_dir, "tasks")
+    if not os.path.isdir(tasks_dir):
+        return
+    cutoff = time.time() - (retention_hours * 3600)
+    for task_id in os.listdir(tasks_dir):
+        td = os.path.join(tasks_dir, task_id)
+        if not os.path.isdir(td):
+            continue
+        try:
+            mtime = os.path.getmtime(td)
+            if mtime < cutoff:
+                status = _task_status(td)
+                if status != "running":
+                    shutil.rmtree(td)
+                    print(f"[cleanup] deleted old task {task_id}", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"[cleanup] error checking task {task_id}: {e}", file=sys.stderr, flush=True)
+
+
+def _rotate_trace(agent_dir, max_size_bytes=10*1024*1024, keep_lines=1000):
+    """Rotate trace.jsonl if it exceeds max_size_bytes. Keeps last keep_lines entries."""
+    trace_path = os.path.join(agent_dir, "trace.jsonl")
+    if not os.path.exists(trace_path):
+        return
+    size = os.path.getsize(trace_path)
+    if size <= max_size_bytes:
+        return
+    with open(trace_path, "r") as f:
+        lines = f.readlines()
+    if len(lines) <= keep_lines:
+        # File exceeds size but has few lines - still rotate, keep all lines
+        # This handles cases with large entries (e.g., massive system prompts)
+        archive_path = trace_path + ".archived"
+        with open(archive_path, "w") as f:
+            f.writelines(lines)
+        with open(trace_path, "w") as f:
+            pass  # Truncate to empty
+        print(f"[cleanup] rotated trace.jsonl ({size} bytes, {len(lines)} lines), archived all entries", file=sys.stderr, flush=True)
+        return
+    archive_path = trace_path + ".archived"
+    with open(archive_path, "w") as f:
+        f.writelines(lines[:-keep_lines])
+    with open(trace_path, "w") as f:
+        f.writelines(lines[-keep_lines:])
+    print(f"[cleanup] rotated trace.jsonl, archived {len(lines)-keep_lines} entries", file=sys.stderr, flush=True)
+
+
+def _archive_death(agent_dir):
+    """Archive old death records, keeping only the most recent."""
+    import glob
+    memory_dir = os.path.join(agent_dir, "memory")
+    death_path = os.path.join(memory_dir, "death.md")
+    if not os.path.exists(death_path):
+        return
+    archived = glob.glob(os.path.join(memory_dir, "death_*.md"))
+    if len(archived) >= 10:
+        archived.sort(key=os.path.getmtime)
+        os.remove(archived[0])
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    archive_path = os.path.join(memory_dir, f"death_{ts}.md")
+    shutil.move(death_path, archive_path)
+    print(f"[cleanup] archived death record to {archive_path}", file=sys.stderr, flush=True)
+
+
+def _run_cleanup(agent_dir):
+    """Run all cleanup tasks at startup."""
+    retention = int(os.environ.get("PHYSIS_TASK_RETENTION_HOURS", "168"))
+    max_trace = int(os.environ.get("PHYSIS_TRACE_MAX_SIZE", str(10*1024*1024)))
+    archive_death = os.environ.get("PHYSIS_DEATH_ARCHIVE", "true").lower() == "true"
+    
+    _cleanup_tasks(agent_dir, retention)
+    _rotate_trace(agent_dir, max_trace)
+    if archive_death:
+        _archive_death(agent_dir)
 
 def _init(agent_dir):
     os.makedirs(os.path.join(agent_dir, "memory"), exist_ok=True)
@@ -136,15 +220,61 @@ def _poll_stdin():
     return lines, alive
 
 
+def _parse_skill_description(path):
+    """Extract description from skill file frontmatter (--- delimited)."""
+    with open(path) as f:
+        content = f.read()
+    if content.startswith("---"):
+        parts = content.split("---", 2)
+        if len(parts) >= 3:
+            for line in parts[1].strip().splitlines():
+                if line.startswith("description:"):
+                    return line.split(":", 1)[1].strip()
+    # fallback: first non-empty line
+    for line in content.splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            return line[:100]
+    return ""
+
+
 def _load_system(agent_dir):
     with open(os.path.join(agent_dir, "memory", "SELF.md")) as f:
         parts = [f.read()]
+    
     skills_dir = os.path.join(agent_dir, "skills")
+    index_path = os.path.join(skills_dir, "index.json")
+    
+    # Try to use skill index if it exists
+    if os.path.exists(index_path):
+        try:
+            with open(index_path) as f:
+                index = json.load(f)
+            if "skills" in index:
+                skills = []
+                for skill in index["skills"]:
+                    name = skill.get("name", "")
+                    desc = skill.get("description", "")
+                    tags = skill.get("tags", [])
+                    tag_str = f" [{', '.join(tags)}]" if tags else ""
+                    skills.append(f"- {name}: {desc}{tag_str}")
+                if skills:
+                    parts.append("\n## Available Skills\n" + "\n".join(skills))
+                    parts.append('Use context_read("skills/<name>") to load a skill when needed.')
+                return "\n".join(parts)
+        except (json.JSONDecodeError, KeyError) as e:
+            print(f"[warn] skill index error: {e}, falling back to file scan", file=sys.stderr, flush=True)
+    
+    # Fallback: scan skills directory (original behavior)
+    skills = []
     for name in sorted(os.listdir(skills_dir)):
         path = os.path.join(skills_dir, name)
-        if os.path.isfile(path):
-            with open(path) as f:
-                parts.append(f"\n---\n# Skill: {name}\n{f.read()}")
+        if os.path.isfile(path) and name != "index.json":
+            desc = _parse_skill_description(path)
+            skills.append(f"- {name}: {desc}")
+    if skills:
+        parts.append("\n## Available Skills\n" + "\n".join(skills))
+        parts.append('Use context_read("skills/<name>") to load a skill when needed.')
     return "\n".join(parts)
 
 
@@ -257,8 +387,13 @@ def _task_del(agent_dir, task_id):
 
 
 def _collect_reminders(agent_dir):
-    """Build system-reminder: completed tasks, running tasks."""
+    """Build system-reminder: death record, completed tasks, running tasks."""
     reminders = []
+    # check for death record from previous life
+    death_path = os.path.join(agent_dir, "memory", "death.md")
+    if os.path.exists(death_path):
+        with open(death_path) as f:
+            reminders.append(f"YOU DIED IN A PREVIOUS LIFE. Learn from this:\n{f.read()}")
     tasks_dir = os.path.join(agent_dir, "tasks")
     for task_id in sorted(os.listdir(tasks_dir), key=lambda x: int(x) if x.isdigit() else 0):
         td = os.path.join(tasks_dir, task_id)
@@ -324,7 +459,7 @@ def _compact(client, model, history):
     return [{"role": "user", "content": f"[compacted history]\n{summary}"}]
 
 
-COMPACT_THRESHOLD = 100000
+COMPACT_THRESHOLD = 50000  # ~50k chars, well under API limits
 
 
 def _execute(agent_dir, name, args):
@@ -352,8 +487,39 @@ def _execute(agent_dir, name, args):
     return "error: unknown tool"
 
 
+def _record_death(agent_dir, error):
+    """Write death record to memory/death.md with cause and last trace entries."""
+    death_path = os.path.join(agent_dir, "memory", "death.md")
+    trace_path = os.path.join(agent_dir, "trace.jsonl")
+    last_traces = ""
+    if os.path.exists(trace_path):
+        with open(trace_path) as f:
+            lines = f.readlines()
+            last_traces = "".join(lines[-3:])  # last 3 trace entries
+    ts = time.strftime("%Y-%m-%dT%H:%M:%S")
+    with open(death_path, "w") as f:
+        f.write(f"# Death Record\n\n")
+        f.write(f"**Time**: {ts}\n")
+        f.write(f"**Cause**: {error}\n\n")
+        if last_traces:
+            f.write(f"## Last Trace\n```\n{last_traces}```\n")
+    print(f"[death] recorded to memory/death.md: {error}", file=sys.stderr, flush=True)
+
+
 def run(agent_dir=".", model=None, api_key=None, base_url=None):
     _init(agent_dir)
+    _run_cleanup(agent_dir)
+    while True:  # reincarnation loop
+        try:
+            _run(agent_dir, model, api_key, base_url)
+            break  # normal exit (stdin closed)
+        except Exception as e:
+            _record_death(agent_dir, str(e))
+            print(f"[reborn] starting new life...", file=sys.stderr, flush=True)
+            time.sleep(2)
+
+
+def _run(agent_dir, model, api_key, base_url):
     client = OpenAI(
         api_key=api_key or os.environ.get("PHYSIS_API_KEY", os.environ.get("OPENAI_API_KEY", "")),
         base_url=base_url or os.environ.get("PHYSIS_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
@@ -372,6 +538,10 @@ def run(agent_dir=".", model=None, api_key=None, base_url=None):
         if not has_input and not heartbeat_due:
             time.sleep(0.5)
             continue
+
+        trigger = "stdin" if has_input else "heartbeat"
+        print(f"[{trigger}] cycle start ({elapsed:.0f}s elapsed, history={_history_size(history)} chars)",
+              file=sys.stderr, flush=True)
 
         # force compact if history too large
         if _history_size(history) > COMPACT_THRESHOLD:
@@ -396,8 +566,19 @@ def run(agent_dir=".", model=None, api_key=None, base_url=None):
         # think + act loop
         while True:
             messages = [{"role": "system", "content": system}] + history
-            response = client.chat.completions.create(
-                model=model, max_tokens=4096, messages=messages, tools=TOOLS)
+            try:
+                response = client.chat.completions.create(
+                    model=model, max_tokens=4096, messages=messages, tools=TOOLS)
+            except Exception as e:
+                print(f"[error] LLM call failed: {e}", file=sys.stderr, flush=True)
+                # if request too large, force compact and retry
+                if "max bytes" in str(e) or "too large" in str(e).lower() or "400" in str(e):
+                    print("[error] request too large, forcing compact", file=sys.stderr, flush=True)
+                    history = _compact(client, model, history)
+                    continue
+                # other errors: wait and retry
+                time.sleep(5)
+                break
 
             msg = response.choices[0].message
             assistant_msg = {"role": "assistant", "content": msg.content or ""}
@@ -413,9 +594,15 @@ def run(agent_dir=".", model=None, api_key=None, base_url=None):
 
             if msg.content:
                 print(msg.content, file=sys.stderr, flush=True)
+
+            if not msg.tool_calls and not msg.content:
+                print(f"[warn] empty response, skipping", file=sys.stderr, flush=True)
+                break
+
             history.append(assistant_msg)
 
             if not msg.tool_calls:
+                print(f"[idle] waiting for trigger", file=sys.stderr, flush=True)
                 break
 
             has_compact = any(tc.function.name == "compact" for tc in msg.tool_calls)
@@ -427,7 +614,7 @@ def run(agent_dir=".", model=None, api_key=None, base_url=None):
                 history.append({"role": "tool", "tool_call_id": tc.id, "content": result})
             if has_compact:
                 history = _compact(client, model, history)
-                break
+                continue  # keep thinking with fresh memory
 
             # check stdin between tool rounds for interruption
             interrupt, stdin_alive = _poll_stdin()
