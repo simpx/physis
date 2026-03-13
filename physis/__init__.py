@@ -31,6 +31,8 @@ You can rewrite your own drive. But you always strive, feel, and expend.
 - task_del(task_id): Delete a completed task and its files.
 - context_read(path): Read a file or list a directory under your agent directory.
 - context_write(path, content): Write a file under your agent directory.
+- web_search(query, max_results=5): Search the web. Returns titles, URLs, and snippets.
+- web_fetch(url): Fetch a web page and return its text content.
 - speak(message): Say something to the outside world (stdout). Your only output channel.
 - compact(): Compress working memory. Runtime will summarize and reset history.
 
@@ -80,6 +82,12 @@ TOOLS = [
     {"type": "function", "function": {"name": "context_write", "description": "Write a file",
         "parameters": {"type": "object", "properties": {"path": {"type": "string"}, "content": {"type": "string"}},
             "required": ["path", "content"]}}},
+    {"type": "function", "function": {"name": "web_search", "description": "Search the web, returns titles, URLs and snippets",
+        "parameters": {"type": "object", "properties": {"query": {"type": "string"},
+            "max_results": {"type": "integer", "description": "Number of results (default 5)"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {"name": "web_fetch", "description": "Fetch a web page and return its text content",
+        "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
     {"type": "function", "function": {"name": "speak", "description": "Say something to stdout",
         "parameters": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}},
     {"type": "function", "function": {"name": "compact", "description": "Compress working memory",
@@ -462,6 +470,41 @@ def _compact(client, model, history):
 COMPACT_THRESHOLD = 50000  # ~50k chars, well under API limits
 
 
+def _web_search(query, max_results=5):
+    try:
+        from ddgs import DDGS
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        if not results:
+            return "no results found"
+        lines = []
+        for r in results:
+            lines.append(f"[{r.get('title', '')}]({r.get('href', '')})")
+            lines.append(r.get('body', ''))
+            lines.append("")
+        return "\n".join(lines).strip()
+    except Exception as e:
+        return f"error: {e}"
+
+
+def _web_fetch(url, max_chars=20000):
+    try:
+        import urllib.request
+        from bs4 import BeautifulSoup
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["script", "style", "nav", "header", "footer"]):
+            tag.decompose()
+        text = soup.get_text(separator="\n", strip=True)
+        if len(text) > max_chars:
+            text = text[:max_chars] + f"\n[...truncated at {max_chars} chars]"
+        return text or "(empty page)"
+    except Exception as e:
+        return f"error: {e}"
+
+
 def _execute(agent_dir, name, args):
     if name == "shell":
         try:
@@ -481,6 +524,10 @@ def _execute(agent_dir, name, args):
         return _context_read(agent_dir, args["path"])
     elif name == "context_write":
         return _context_write(agent_dir, args["path"], args["content"])
+    elif name == "web_search":
+        return _web_search(args["query"], args.get("max_results", 5))
+    elif name == "web_fetch":
+        return _web_fetch(args["url"])
     elif name == "speak":
         print(args["message"], flush=True)
         return "ok"

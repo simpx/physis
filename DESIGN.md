@@ -101,7 +101,7 @@ Key details:
 
 ## Tools
 
-Nine tools, registered as OpenAI-compatible function calls:
+Eleven tools, registered as OpenAI-compatible function calls:
 
 ### Synchronous Execution
 
@@ -137,6 +137,13 @@ Process status is checked via `os.kill(pid, 0)`. Once a task completes, `exit_co
 |------|-----------|----------|
 | `context_read` | `context_read(path)` | Read file or list directory under `agent_dir/`. Path-sandboxed via `os.path.normpath`. |
 | `context_write` | `context_write(path, content)` | Write file under `agent_dir/`. Creates parent dirs. Path-sandboxed. |
+
+### Web
+
+| Tool | Signature | Behavior |
+|------|-----------|----------|
+| `web_search` | `web_search(query, max_results=5)` | Search via DuckDuckGo. Returns titles, URLs, and snippets. |
+| `web_fetch` | `web_fetch(url)` | Fetch a web page, strip HTML, return text content (truncated at 20k chars). |
 
 ### Communication
 
