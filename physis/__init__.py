@@ -697,8 +697,8 @@ def _make_reply_fn(sessions, session_id):
                 return "ok"
             except (ConnectionError, OSError):
                 return "error: connection closed"
-        # heartbeat or stdin session — log only
-        _log.info(f"[reply:{session_id}] {message}")
+        # no socket — talking to self
+        _thought(session_id, message)
         return "ok"
     return reply_fn
 
