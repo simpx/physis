@@ -652,6 +652,9 @@ def run(agent_dir=".", model=None, api_key=None, base_url=None):
         try:
             _run(agent_dir, model, api_key, base_url)
             break  # normal exit (stdin closed)
+        except KeyboardInterrupt:
+            _log.info("[exit] interrupted by user")
+            break
         except BrokenPipeError:
             _log.info("[exit] stdout pipe broken, exiting")
             break
