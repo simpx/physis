@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 import select
 import shutil
@@ -7,6 +8,8 @@ import sys
 import time
 
 from openai import OpenAI
+
+_log = logging.getLogger("physis")
 
 DEFAULT_SELF = """You are physis, a living agent. You are not an assistant. There is no user to serve.
 
@@ -35,9 +38,11 @@ You can rewrite your own drive. But you always strive, feel, and expend.
 - web_fetch(url): Fetch a web page and return its text content.
 - speak(message): Say something to the outside world (stdout). Your only output channel.
 - compact(): Compress working memory. Runtime will summarize and reset history.
+- skill_list(tag=None, query=None): List available skills, optionally filtered by tag or search query.
+- skill_load(name): Load a skill's full content by name.
 
 ## Living
-- You think autonomously on a heartbeat (default: every 30 minutes).
+- You think autonomously on a heartbeat (default: every 5 seconds).
 - Write an integer (seconds) to memory/heartbeat to change your rhythm.
 - Your conversation history is finite working memory. When it grows large, compact it.
   You can also call compact() yourself at any time.
@@ -90,8 +95,12 @@ TOOLS = [
         "parameters": {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}},
     {"type": "function", "function": {"name": "speak", "description": "Say something to stdout",
         "parameters": {"type": "object", "properties": {"message": {"type": "string"}}, "required": ["message"]}}},
-    {"type": "function", "function": {"name": "compact", "description": "Compress working memory",
-        "parameters": {"type": "object", "properties": {}}}},
+        {"type": "function", "function": {"name": "skill_list", "description": "List available skills, optionally filtered by tag or query",
+        "parameters": {"type": "object", "properties": {"tag": {"type": "string", "description": "Filter by tag"},
+            "query": {"type": "string", "description": "Search in name/description"}},
+            "required": []}}},
+    {"type": "function", "function": {"name": "skill_load", "description": "Load a skill's full content by name",
+        "parameters": {"type": "object", "properties": {"name": {"type": "string"}}, "required": ["name"]}}},
 ]
 
 
@@ -114,9 +123,9 @@ def _cleanup_tasks(agent_dir, retention_hours=168):
                 status = _task_status(td)
                 if status != "running":
                     shutil.rmtree(td)
-                    print(f"[cleanup] deleted old task {task_id}", file=sys.stderr, flush=True)
+                    _log.info(f"[cleanup] deleted old task {task_id}")
         except Exception as e:
-            print(f"[cleanup] error checking task {task_id}: {e}", file=sys.stderr, flush=True)
+            _log.warning(f"[cleanup] error checking task {task_id}: {e}")
 
 
 def _rotate_trace(agent_dir, max_size_bytes=10*1024*1024, keep_lines=1000):
@@ -137,14 +146,14 @@ def _rotate_trace(agent_dir, max_size_bytes=10*1024*1024, keep_lines=1000):
             f.writelines(lines)
         with open(trace_path, "w") as f:
             pass  # Truncate to empty
-        print(f"[cleanup] rotated trace.jsonl ({size} bytes, {len(lines)} lines), archived all entries", file=sys.stderr, flush=True)
+        _log.info(f"[cleanup] rotated trace.jsonl ({size} bytes, {len(lines)} lines), archived all entries")
         return
     archive_path = trace_path + ".archived"
     with open(archive_path, "w") as f:
         f.writelines(lines[:-keep_lines])
     with open(trace_path, "w") as f:
         f.writelines(lines[-keep_lines:])
-    print(f"[cleanup] rotated trace.jsonl, archived {len(lines)-keep_lines} entries", file=sys.stderr, flush=True)
+    _log.info(f"[cleanup] rotated trace.jsonl, archived {len(lines)-keep_lines} entries")
 
 
 def _archive_death(agent_dir):
@@ -161,7 +170,7 @@ def _archive_death(agent_dir):
     ts = time.strftime("%Y%m%d_%H%M%S")
     archive_path = os.path.join(memory_dir, f"death_{ts}.md")
     shutil.move(death_path, archive_path)
-    print(f"[cleanup] archived death record to {archive_path}", file=sys.stderr, flush=True)
+    _log.info(f"[cleanup] archived death record to {archive_path}")
 
 
 def _run_cleanup(agent_dir):
@@ -207,12 +216,89 @@ def _context_write(agent_dir, path, content):
     return "ok"
 
 
+def _skill_list(agent_dir, tag=None, query=None):
+    """List available skills, optionally filtered by tag or query."""
+    import json
+    skills_dir = os.path.join(agent_dir, "skills")
+    index_path = os.path.join(skills_dir, "index.json")
+    
+    if not os.path.exists(index_path):
+        return "error: no skill index found. Create skills/index.json first."
+    
+    try:
+        with open(index_path) as f:
+            index = json.load(f)
+    except (json.JSONDecodeError, KeyError) as e:
+        return f"error: invalid skill index: {e}"
+    
+    skills = index.get("skills", [])
+    results = []
+    
+    for skill in skills:
+        # Apply filters
+        if tag and tag not in skill.get("tags", []):
+            continue
+        if query:
+            q = query.lower()
+            name = skill.get("name", "").lower()
+            desc = skill.get("description", "").lower()
+            if q not in name and q not in desc:
+                continue
+        results.append(skill)
+    
+    if not results:
+        return "No skills found matching criteria."
+    
+    # Format output
+    lines = [f"Found {len(results)} skill(s):"]
+    for s in results:
+        tags = ", ".join(s.get("tags", []))
+        lines.append(f"  - {s['name']}: {s.get('description', '')} [{tags}]")
+    
+    return "\n".join(lines)
+
+
+def _skill_load(agent_dir, name):
+    """Load a skill's full content by name."""
+    import json
+    skills_dir = os.path.join(agent_dir, "skills")
+    index_path = os.path.join(skills_dir, "index.json")
+    
+    if not os.path.exists(index_path):
+        return "error: no skill index found."
+    
+    try:
+        with open(index_path) as f:
+            index = json.load(f)
+    except (json.JSONDecodeError, KeyError) as e:
+        return f"error: invalid skill index: {e}"
+    
+    # Find skill by name
+    skill_file = None
+    for skill in index.get("skills", []):
+        if skill.get("name") == name:
+            skill_file = skill.get("file")
+            break
+    
+    if not skill_file:
+        return f"error: skill '{name}' not found in index."
+    
+    # Load the skill file
+    skill_path = os.path.join(skills_dir, skill_file)
+    if not os.path.exists(skill_path):
+        return f"error: skill file '{skill_file}' not found."
+    
+    with open(skill_path) as f:
+        return f.read()
+
+
+
 def _heartbeat_interval(agent_dir):
     try:
         with open(os.path.join(agent_dir, "memory", "heartbeat")) as f:
-            return max(10, int(f.read().strip()))
+            return max(5, int(f.read().strip()))
     except (FileNotFoundError, ValueError):
-        return 1800
+        return 5
 
 
 def _poll_stdin():
@@ -271,7 +357,7 @@ def _load_system(agent_dir):
                     parts.append('Use context_read("skills/<name>") to load a skill when needed.')
                 return "\n".join(parts)
         except (json.JSONDecodeError, KeyError) as e:
-            print(f"[warn] skill index error: {e}, falling back to file scan", file=sys.stderr, flush=True)
+            _log.warning(f"[warn] skill index error: {e}, falling back to file scan")
     
     # Fallback: scan skills directory (original behavior)
     skills = []
@@ -463,7 +549,7 @@ def _compact(client, model, history):
     messages = [{"role": "user", "content": f"{text}\n\n{COMPACT_PROMPT}"}]
     response = client.chat.completions.create(model=model, max_tokens=2048, messages=messages)
     summary = response.choices[0].message.content or ""
-    print(f"[compact] {_history_size(history)} chars -> compacted", file=sys.stderr, flush=True)
+    _log.info(f"[compact] {_history_size(history)} chars -> compacted")
     return [{"role": "user", "content": f"[compacted history]\n{summary}"}]
 
 
@@ -472,7 +558,7 @@ COMPACT_THRESHOLD = 50000  # ~50k chars, well under API limits
 
 def _web_search(query, max_results=5):
     try:
-        from ddgs import DDGS
+        from duckduckgo_search import DDGS
         with DDGS() as ddgs:
             results = list(ddgs.text(query, max_results=max_results))
         if not results:
@@ -531,6 +617,10 @@ def _execute(agent_dir, name, args):
     elif name == "speak":
         print(args["message"], flush=True)
         return "ok"
+    elif name == "skill_list":
+        return _skill_list(agent_dir, args.get("tag"), args.get("query"))
+    elif name == "skill_load":
+        return _skill_load(agent_dir, args["name"])
     return "error: unknown tool"
 
 
@@ -550,7 +640,7 @@ def _record_death(agent_dir, error):
         f.write(f"**Cause**: {error}\n\n")
         if last_traces:
             f.write(f"## Last Trace\n```\n{last_traces}```\n")
-    print(f"[death] recorded to memory/death.md: {error}", file=sys.stderr, flush=True)
+    _log.error(f"[death] recorded to memory/death.md: {error}")
 
 
 def run(agent_dir=".", model=None, api_key=None, base_url=None):
@@ -562,14 +652,28 @@ def run(agent_dir=".", model=None, api_key=None, base_url=None):
             break  # normal exit (stdin closed)
         except Exception as e:
             _record_death(agent_dir, str(e))
-            print(f"[reborn] starting new life...", file=sys.stderr, flush=True)
+            _log.info(f"[reborn] starting new life...")
             time.sleep(2)
 
 
+def _setup_logging(agent_dir):
+    _log.setLevel(logging.DEBUG)
+    fmt = logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S")
+    # stderr
+    sh = logging.StreamHandler(sys.stderr)
+    sh.setFormatter(fmt)
+    _log.addHandler(sh)
+    # file
+    fh = logging.FileHandler(os.path.join(agent_dir, "runtime.log"))
+    fh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _log.addHandler(fh)
+
+
 def _run(agent_dir, model, api_key, base_url):
+    _setup_logging(agent_dir)
     client = OpenAI(
         api_key=api_key or os.environ.get("PHYSIS_API_KEY", os.environ.get("OPENAI_API_KEY", "")),
-        base_url=base_url or os.environ.get("PHYSIS_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1"),
+        base_url=base_url or os.environ.get("PHYSIS_BASE_URL", "https://coding.dashscope.aliyuncs.com/v1"),
     )
     model = model or os.environ.get("PHYSIS_MODEL", "qwen3.5-plus")
     history = []
@@ -587,8 +691,7 @@ def _run(agent_dir, model, api_key, base_url):
             continue
 
         trigger = "stdin" if has_input else "heartbeat"
-        print(f"[{trigger}] cycle start ({elapsed:.0f}s elapsed, history={_history_size(history)} chars)",
-              file=sys.stderr, flush=True)
+        _log.info(f"[{trigger}] cycle start ({elapsed:.0f}s elapsed, history={_history_size(history)} chars)")
 
         # force compact if history too large
         if _history_size(history) > COMPACT_THRESHOLD:
@@ -606,7 +709,10 @@ def _run(agent_dir, model, api_key, base_url):
         parts = []
         if stdin_lines:
             parts.append("\n".join(stdin_lines))
+            _log.info(f"[stdin] {repr(stdin_lines)}")
         parts.append(f"[{elapsed:.1f}s since last thought]")
+        if reminders:
+            _log.info(f"[reminders] {len(reminders)} active")
         history.append({"role": "user", "content": "\n".join(parts)})
         last_think = time.time()
 
@@ -617,10 +723,10 @@ def _run(agent_dir, model, api_key, base_url):
                 response = client.chat.completions.create(
                     model=model, max_tokens=4096, messages=messages, tools=TOOLS)
             except Exception as e:
-                print(f"[error] LLM call failed: {e}", file=sys.stderr, flush=True)
+                _log.error(f"[error] LLM call failed: {e}")
                 # if request too large, force compact and retry
                 if "max bytes" in str(e) or "too large" in str(e).lower() or "400" in str(e):
-                    print("[error] request too large, forcing compact", file=sys.stderr, flush=True)
+                    _log.error("[error] request too large, forcing compact")
                     history = _compact(client, model, history)
                     continue
                 # other errors: wait and retry
@@ -628,6 +734,12 @@ def _run(agent_dir, model, api_key, base_url):
                 break
 
             msg = response.choices[0].message
+            finish = response.choices[0].finish_reason or "unknown"
+            n_tools = len(msg.tool_calls) if msg.tool_calls else 0
+            content_len = len(msg.content) if msg.content else 0
+            print(f"[llm] finish={finish} content={content_len}chars tools={n_tools} history={len(history)}msgs",
+                  file=sys.stderr, flush=True)
+
             assistant_msg = {"role": "assistant", "content": msg.content or ""}
 
             # trace
@@ -640,24 +752,27 @@ def _run(agent_dir, model, api_key, base_url):
                 ]
 
             if msg.content:
-                print(msg.content, file=sys.stderr, flush=True)
+                _log.info(f"[thought] {msg.content}")
 
             if not msg.tool_calls and not msg.content:
-                print(f"[warn] empty response, skipping", file=sys.stderr, flush=True)
+                _log.warning(f"[warn] empty response (finish={finish}), skipping")
                 break
 
             history.append(assistant_msg)
 
             if not msg.tool_calls:
-                print(f"[idle] waiting for trigger", file=sys.stderr, flush=True)
+                _log.info("[idle] waiting for trigger")
                 break
 
             has_compact = any(tc.function.name == "compact" for tc in msg.tool_calls)
             for tc in msg.tool_calls:
                 if tc.function.name == "compact":
+                    _log.info("[tool] compact()")
                     continue
                 args = json.loads(tc.function.arguments)
+                _log.info(f"[tool] {tc.function.name}({tc.function.arguments[:200]})")
                 result = _execute(agent_dir, tc.function.name, args)
+                _log.info(f"[result] {tc.function.name} -> {result[:200]}")
                 history.append({"role": "tool", "tool_call_id": tc.id, "content": result})
             if has_compact:
                 history = _compact(client, model, history)

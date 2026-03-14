@@ -268,7 +268,7 @@ agent_dir/              # defaults to cwd
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `PHYSIS_API_KEY` | — | API key (or `OPENAI_API_KEY`) |
-| `PHYSIS_BASE_URL` | `https://dashscope.aliyuncs.com/compatible-mode/v1` | OpenAI-compatible endpoint |
+| `PHYSIS_BASE_URL` | `https://coding.dashscope.aliyuncs.com/v1` | OpenAI-compatible endpoint |
 | `PHYSIS_MODEL` | `qwen3.5-plus` | Model name |
 
 No config files. No flags.
