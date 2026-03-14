@@ -811,6 +811,16 @@ def _run(agent_dir, model, api_key, base_url):
             session_id = next((sid for sid in pending if pending[sid]), None)
             elapsed = time.time() - last_think
             if not session_id and elapsed >= _heartbeat_interval(agent_dir):
+                # If there are active connections, wait a beat for input before heartbeat
+                has_active_conn = any(
+                    "socket" in s for sid, s in sessions.items() if sid != "_heartbeat"
+                )
+                if has_active_conn:
+                    r, _, _ = select.select([
+                        s.get("socket") for s in sessions.values() if s.get("socket")
+                    ], [], [], 0.5)
+                    if r:
+                        continue  # data incoming, skip heartbeat this round
                 session_id = "_heartbeat"
             if not session_id:
                 continue
@@ -902,6 +912,7 @@ def _run(agent_dir, model, api_key, base_url):
 
                 # Execute tools
                 has_compact = False
+                replied = False
                 for tc in msg.tool_calls:
                     if tc.function.name == "compact":
                         _log.info("[tool] compact()")
@@ -916,6 +927,13 @@ def _run(agent_dir, model, api_key, base_url):
                         result = result[:MAX_TOOL_RESULT] + f"\n[...truncated at {MAX_TOOL_RESULT} chars, total {len(result)}]"
                     _log.info(f"[result] {tc.function.name} -> {result[:200]}")
                     history.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+                    if tc.function.name == "reply" and result == "ok":
+                        replied = True
+                # After reply in a conn session, stop — don't waste an LLM call for finish=stop
+                if replied and session_id != "_heartbeat":
+                    _log.info(f"[idle:{session_id}] replied, waiting for trigger")
+                    _sl.clear()
+                    break
                 if has_compact:
                     session["history"] = _compact(client, model, history)
                     history = session["history"]
