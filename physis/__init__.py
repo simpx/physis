@@ -678,10 +678,12 @@ def _setup_logging(agent_dir):
 
 
 def _thought(session_id, content):
-    """Write inner monologue to thought.log."""
+    """Write inner monologue to thought.log and stderr."""
     ts = time.strftime("%H:%M:%S")
-    _thought_file.write(f"[{ts}][{session_id}] {content}\n\n")
+    line = f"[{ts}][{session_id}] {content}\n\n"
+    _thought_file.write(line)
     _thought_file.flush()
+    print(line, end="", file=sys.stderr, flush=True)
 
 
 def _make_reply_fn(sessions, session_id):
@@ -922,6 +924,15 @@ def _run(agent_dir, model, api_key, base_url):
                     session["history"] = _compact(client, model, history)
                     history = session["history"]
                     break  # compacted, wait for next trigger
+
+                # interrupt heartbeat if a connection has pending input
+                if session_id == "_heartbeat":
+                    r, _, _ = select.select([server] + [
+                        s.get("socket") for s in sessions.values() if s.get("socket")
+                    ], [], [], 0)
+                    if r:
+                        _log.info(f"[interrupt:_heartbeat] connection activity, pausing thought")
+                        break
 
                 # rebuild system with fresh reminders
                 system = _load_system(agent_dir)
