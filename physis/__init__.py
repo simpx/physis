@@ -195,8 +195,9 @@ def _init(agent_dir):
 
 
 def _context_read(agent_dir, path):
-    full = os.path.normpath(os.path.join(agent_dir, path))
-    if not full.startswith(os.path.normpath(agent_dir)):
+    base = os.path.abspath(agent_dir)
+    full = os.path.normpath(os.path.join(base, path))
+    if not full.startswith(base + os.sep) and full != base:
         return "error: path outside agent directory"
     if os.path.isdir(full):
         return "\n".join(os.listdir(full))
@@ -207,8 +208,9 @@ def _context_read(agent_dir, path):
 
 
 def _context_write(agent_dir, path, content):
-    full = os.path.normpath(os.path.join(agent_dir, path))
-    if not full.startswith(os.path.normpath(agent_dir)):
+    base = os.path.abspath(agent_dir)
+    full = os.path.normpath(os.path.join(base, path))
+    if not full.startswith(base + os.sep) and full != base:
         return "error: path outside agent directory"
     os.makedirs(os.path.dirname(full), exist_ok=True)
     with open(full, "w") as f:
@@ -650,6 +652,9 @@ def run(agent_dir=".", model=None, api_key=None, base_url=None):
         try:
             _run(agent_dir, model, api_key, base_url)
             break  # normal exit (stdin closed)
+        except BrokenPipeError:
+            _log.info("[exit] stdout pipe broken, exiting")
+            break
         except Exception as e:
             _record_death(agent_dir, str(e))
             _log.info(f"[reborn] starting new life...")
@@ -657,13 +662,10 @@ def run(agent_dir=".", model=None, api_key=None, base_url=None):
 
 
 def _setup_logging(agent_dir):
+    if _log.handlers:
+        return  # already set up, avoid duplicate handlers on reborn
     _log.setLevel(logging.DEBUG)
-    fmt = logging.Formatter("%(asctime)s %(message)s", datefmt="%H:%M:%S")
-    # stderr
-    sh = logging.StreamHandler(sys.stderr)
-    sh.setFormatter(fmt)
-    _log.addHandler(sh)
-    # file
+    # file only — stderr is reserved for inner monologue
     fh = logging.FileHandler(os.path.join(agent_dir, "runtime.log"))
     fh.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
     _log.addHandler(fh)
@@ -737,8 +739,7 @@ def _run(agent_dir, model, api_key, base_url):
             finish = response.choices[0].finish_reason or "unknown"
             n_tools = len(msg.tool_calls) if msg.tool_calls else 0
             content_len = len(msg.content) if msg.content else 0
-            print(f"[llm] finish={finish} content={content_len}chars tools={n_tools} history={len(history)}msgs",
-                  file=sys.stderr, flush=True)
+            _log.info(f"[llm] finish={finish} content={content_len}chars tools={n_tools} history={len(history)}msgs")
 
             assistant_msg = {"role": "assistant", "content": msg.content or ""}
 
@@ -753,6 +754,7 @@ def _run(agent_dir, model, api_key, base_url):
 
             if msg.content:
                 _log.info(f"[thought] {msg.content}")
+                print(msg.content, file=sys.stderr, flush=True)
 
             if not msg.tool_calls and not msg.content:
                 _log.warning(f"[warn] empty response (finish={finish}), skipping")
