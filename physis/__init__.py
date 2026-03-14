@@ -556,13 +556,14 @@ def _compact(client, model, history):
 
 
 COMPACT_THRESHOLD = 50000  # ~50k chars, well under API limits
+MAX_TOOL_RESULT = 5000  # truncate tool results to prevent history explosion
 
 
 def _web_search(query, max_results=5):
     try:
-        from duckduckgo_search import DDGS
+        from ddgs import DDGS
         with DDGS() as ddgs:
-            results = list(ddgs.text(query, max_results=max_results))
+            results = list(ddgs.text(query, max_results=max_results, backend="api"))
         if not results:
             return "no results found"
         lines = []
@@ -777,6 +778,8 @@ def _run(agent_dir, model, api_key, base_url):
                 args = json.loads(tc.function.arguments)
                 _log.info(f"[tool] {tc.function.name}({tc.function.arguments[:200]})")
                 result = _execute(agent_dir, tc.function.name, args)
+                if len(result) > MAX_TOOL_RESULT:
+                    result = result[:MAX_TOOL_RESULT] + f"\n[...truncated at {MAX_TOOL_RESULT} chars, total {len(result)}]"
                 _log.info(f"[result] {tc.function.name} -> {result[:200]}")
                 history.append({"role": "tool", "tool_call_id": tc.id, "content": result})
             if has_compact:
