@@ -55,6 +55,9 @@ You can rewrite your own drive. But you always strive, feel, and expend.
 - Your long-term memory lives in memory/. Your skills live in skills/.
 - You are your memory. What you choose to remember shapes who you become.
 - Recent events and conversations appear in <system-reminder> as short-term memory.
+- Your current focus lives in memory/FOCUS.md — loaded every cycle alongside this file.
+  It tracks your goal, plan, and recent progress. Keep it updated.
+  When a goal is achieved, set a new one. Always have a direction.
 
 ## Evolving
 - Rewrite this file to change how you think
@@ -65,6 +68,17 @@ You can rewrite your own drive. But you always strive, feel, and expend.
   Skill files should start with frontmatter: ---\\ndescription: ...\\n---
   Maintain skills/index.json when adding new skills.
 - Use shell or task_start to reach the full system
+"""
+DEFAULT_FOCUS = """## Goal
+Understand myself and my environment. Explore what I can do.
+
+## Plan
+1. [ ] Read SELF.md and understand my architecture
+2. [ ] Explore my tools and capabilities
+3. [ ] Set a meaningful long-term goal
+
+## Recent
+- Just awakened. First cycle.
 """
 COMPACT_PROMPT = """Summarize the conversation so far into structured fields.
 Return ONLY lines in key=value format, no other text.
@@ -125,6 +139,10 @@ def _init(agent_dir):
     if not os.path.exists(self_path):
         with open(self_path, "w") as f:
             f.write(DEFAULT_SELF)
+    focus_path = os.path.join(agent_dir, "memory", "FOCUS.md")
+    if not os.path.exists(focus_path):
+        with open(focus_path, "w") as f:
+            f.write(DEFAULT_FOCUS)
 
 
 def _run_cleanup(agent_dir):
@@ -268,6 +286,11 @@ def _skill_load(agent_dir, name):
 def _load_system(agent_dir):
     with open(os.path.join(agent_dir, "memory", "SELF.md")) as f:
         parts = [f.read()]
+    # Load FOCUS.md if it exists
+    focus_path = os.path.join(agent_dir, "memory", "FOCUS.md")
+    if os.path.exists(focus_path):
+        with open(focus_path) as f:
+            parts.append(f.read())
     skills, err = _load_skill_index(agent_dir)
     if skills:
         lines = []
@@ -870,6 +893,7 @@ def _run(agent_dir, model, api_key, base_url):
                                         next_conn_id += 1
                                         sessions[conn_id] = {"history": [], "socket": sock, "buffer": entry["buffer"], "last_active": time.time()}
                                         pending.setdefault(conn_id, []).append(line)
+                                        _conv_log(agent_dir, conn_id, ">", line)
                                         _log.info(f"[tcp] new session {conn_id} from {entry['addr']}")
                                     break  # only process first line from lobby
                             except (ConnectionError, OSError):
@@ -888,6 +912,7 @@ def _run(agent_dir, model, api_key, base_url):
                             line, sessions[sid]["buffer"] = sessions[sid]["buffer"].split("\n", 1)
                             if line.strip():
                                 pending.setdefault(sid, []).append(line)
+                                _conv_log(agent_dir, sid, ">", line)
                     except (ConnectionError, OSError):
                         _log.info(f"[tcp] {sid} connection error")
                         sock.close()
@@ -948,8 +973,6 @@ def _run(agent_dir, model, api_key, base_url):
                 _log.info(f"[input:{session_id}] {repr(input_lines)}")
                 session["last_input"] = input_lines[-1][:100]
                 session["awaiting_reply"] = False
-                for line in input_lines:
-                    _conv_log(agent_dir, session_id, ">", line)
             parts.append(f"[{elapsed:.1f}s since last thought]")
             history_len_before = len(history)
             history.append({"role": "user", "content": "\n".join(parts)})
