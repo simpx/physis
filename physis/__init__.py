@@ -798,29 +798,37 @@ def main():
     args = parser.parse_args()
     agent_dir = args.dir
 
-    # Check if directory has non-physis files
-    if os.path.exists(agent_dir):
-        physis_dirs = {"memory", "skills", "tasks", "conversations"}
-        physis_files = {"runtime.log", "thought.log", "trace.jsonl"}
-        existing = set(os.listdir(agent_dir))
-        foreign = existing - physis_dirs - physis_files
-        if foreign and not existing & physis_dirs:
-            from rich.console import Console
-            from rich.prompt import Prompt
-            console = Console(stderr=True)
-            abs_dir = os.path.abspath(agent_dir)
-            console.print(f"\n  [bold]physis[/bold] wants to run in: [cyan]{abs_dir}[/cyan]")
-            console.print(f"  This directory has existing files: [yellow]{', '.join(sorted(foreign)[:5])}[/yellow]")
-            console.print(f"  physis will create memory/, skills/, tasks/ and run shell commands here.")
-            console.print(f"  Recommended: use an empty directory [dim](mkdir my-agent && cd my-agent)[/dim]\n")
-            try:
-                answer = Prompt.ask("  Continue in this directory?", choices=["y", "n"], default="n", console=console)
-            except (EOFError, KeyboardInterrupt):
-                print()
-                sys.exit(0)
-            if answer != "y":
-                sys.exit(0)
+    # First-time launch check — warn if not a physis directory
+    physis_dirs = {"memory", "skills", "tasks", "conversations"}
+    is_physis_dir = os.path.exists(agent_dir) and (set(os.listdir(agent_dir)) & physis_dirs)
+    if not is_physis_dir:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.prompt import Prompt
+        console = Console(stderr=True)
+        abs_dir = os.path.abspath(agent_dir)
+        console.print()
+        console.print(Panel(
+            "[bold yellow]Warning[/bold yellow]\n\n"
+            "physis is a [bold]self-governing living agent[/bold]. Once started, it will:\n\n"
+            "  - Execute shell commands autonomously\n"
+            "  - Read and write files in this directory\n"
+            "  - Access the internet (web search, HTTP requests)\n"
+            "  - Make its own decisions about what to do\n\n"
+            "[bold]You are responsible for the environment it runs in.[/bold]\n"
+            "Recommended: run in a [cyan]sandboxed or isolated environment[/cyan].\n\n"
+            f"Directory: [cyan]{abs_dir}[/cyan]",
+            title="[bold]physis[/bold]",
+            border_style="yellow",
+        ))
+        try:
+            answer = Prompt.ask("  Proceed?", choices=["y", "n"], default="n", console=console)
+        except (EOFError, KeyboardInterrupt):
             print()
+            sys.exit(0)
+        if answer != "y":
+            sys.exit(0)
+        print()
 
     if args.inherit_from:
         source = os.path.abspath(args.inherit_from)
