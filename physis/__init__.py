@@ -699,33 +699,42 @@ def _thought(session_id, content):
 class _StatusLine:
     """Persistent status bar using rich.Live, with log output scrolling above."""
     def __init__(self, max_items=10):
-        from rich.live import Live
-        from rich.console import Console
-        self.console = Console(stderr=True)
-        self.live = Live(console=self.console, refresh_per_second=4)
-        self.live.start()
+        self.console = None
+        self.live = None
         self.items = []
         self.max_items = max_items
         self.current = None
         self.session_id = ""
 
+    def _ensure_live(self):
+        if self.live is None:
+            from rich.live import Live
+            from rich.console import Console
+            self.console = Console(stderr=True)
+            self.live = Live(console=self.console, refresh_per_second=4)
+            self.live.start()
+
     def begin(self, session_id, label):
+        self._ensure_live()
         self._finish_current()
         self.session_id = session_id
         self.current = (label, time.time())
         self._render()
 
     def end(self):
+        self._ensure_live()
         self._finish_current()
         self._render()
 
     def clear(self):
+        self._ensure_live()
         self._finish_current()
         self.items = []
         self._render()
 
     def log(self, message):
         """Print above the status line."""
+        self._ensure_live()
         self.live.console.print(message, highlight=False)
 
     def _finish_current(self):
@@ -796,17 +805,22 @@ def main():
         existing = set(os.listdir(agent_dir))
         foreign = existing - physis_dirs - physis_files
         if foreign and not existing & physis_dirs:
-            # Has files but no physis dirs — probably not a physis directory
-            print(f"Current directory has existing files: {', '.join(sorted(foreign)[:5])}")
-            print("physis will create memory/, skills/, tasks/ here.")
-            print("Recommended: run in an empty directory (e.g. mkdir my-agent && cd my-agent)")
+            from rich.console import Console
+            from rich.prompt import Prompt
+            console = Console(stderr=True)
+            abs_dir = os.path.abspath(agent_dir)
+            console.print(f"\n  [bold]physis[/bold] wants to run in: [cyan]{abs_dir}[/cyan]")
+            console.print(f"  This directory has existing files: [yellow]{', '.join(sorted(foreign)[:5])}[/yellow]")
+            console.print(f"  physis will create memory/, skills/, tasks/ and run shell commands here.")
+            console.print(f"  Recommended: use an empty directory [dim](mkdir my-agent && cd my-agent)[/dim]\n")
             try:
-                answer = input("Continue here? [y/N] ").strip().lower()
+                answer = Prompt.ask("  Continue in this directory?", choices=["y", "n"], default="n", console=console)
             except (EOFError, KeyboardInterrupt):
                 print()
                 sys.exit(0)
-            if answer not in ("y", "yes"):
+            if answer != "y":
                 sys.exit(0)
+            print()
 
     if args.inherit_from:
         source = os.path.abspath(args.inherit_from)
